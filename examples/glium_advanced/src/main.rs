@@ -41,7 +41,7 @@ fn main() {
     let context = glutin::ContextBuilder::new().with_vsync(true);
     let display = glium::Display::new(window, context, &events_loop).unwrap();
 
-    let num_instances  = 32;
+    let num_instances = 32;
     let tolerance = 0.02;
 
     // Build a Path for the rust logo.
@@ -50,7 +50,7 @@ fn main() {
     let path = builder.build();
 
     let mut logo_fill_geometry: VertexBuffers<GpuVertex> = VertexBuffers::new();
-    let mut logo_stroke_geometry : VertexBuffers<GpuVertex> = VertexBuffers::new();
+    let mut logo_stroke_geometry: VertexBuffers<GpuVertex> = VertexBuffers::new();
 
     let stroke_prim_id = 0;
     let fill_prim_id = 1;
@@ -72,17 +72,13 @@ fn main() {
         ),
     );
 
- let mut instances = vec![
-        IdVertex { a_prim_id: 0 },
-        ];
+    let mut instances = vec![IdVertex { a_prim_id: 0 }];
 
- for i in 1..num_instances+1 {
- 	 instances.push(IdVertex{
- 		a_prim_id:i as i32,
- 	});
- }
+    for i in 1..num_instances + 1 {
+        instances.push(IdVertex { a_prim_id: i as i32 });
+    }
 
- let instance_buf = glium::VertexBuffer::new(&display, &instances).unwrap();
+    let instance_buf = glium::VertexBuffer::new(&display, &instances).unwrap();
 
     let mut bg_geometry: VertexBuffers<BgVertex> = VertexBuffers::new();
     fill_rectangle(
@@ -146,14 +142,16 @@ fn main() {
     ).unwrap();
 
     //rust logo vertices and indices
-    let logo_fill_vertex_buffer = glium::VertexBuffer::new(&display, &logo_fill_geometry.vertices).unwrap();
+    let logo_fill_vertex_buffer = glium::VertexBuffer::new(&display, &logo_fill_geometry.vertices)
+        .unwrap();
     let logo_fill_index_buffer = glium::IndexBuffer::new(
         &display,
         glium::index::PrimitiveType::TrianglesList,
         &logo_fill_geometry.indices,
-    ).unwrap(); 
+    ).unwrap();
 
-    let logo_stroke_vertex_buffer = glium::VertexBuffer::new(&display, &logo_stroke_geometry.vertices).unwrap();
+    let logo_stroke_vertex_buffer =
+        glium::VertexBuffer::new(&display, &logo_stroke_geometry.vertices).unwrap();
     let logo_stroke_index_buffer = glium::IndexBuffer::new(
         &display,
         glium::index::PrimitiveType::TrianglesList,
@@ -232,8 +230,10 @@ fn main() {
         let logo_uniforms = uniform!{Globals: &ub, u_primitives : &prim_buffer};
         target
             .draw(
-                (&logo_fill_vertex_buffer,
-                instance_buf.per_instance().unwrap()),
+                (
+                    &logo_fill_vertex_buffer,
+                    instance_buf.per_instance().unwrap(),
+                ),
                 &logo_fill_index_buffer,
                 &logo_program,
                 &logo_uniforms,
@@ -244,8 +244,10 @@ fn main() {
         let logo_uniforms = uniform!{Globals: &ub, u_primitives : &prim_buffer};
         target
             .draw(
-               (&logo_stroke_vertex_buffer,
-                instance_buf.per_instance().unwrap()),
+                (
+                    &logo_stroke_vertex_buffer,
+                    instance_buf.per_instance().unwrap(),
+                ),
                 &logo_stroke_index_buffer,
                 &logo_program,
                 &logo_uniforms,
@@ -408,7 +410,7 @@ struct GpuVertex {
 implement_vertex!(GpuVertex, a_position, a_normal);
 
 #[derive(Copy, Clone)]
-struct IdVertex{
+struct IdVertex {
     a_prim_id: i32, // An id pointing to the PrimData struct above.
 }
 
