@@ -164,8 +164,8 @@ pub extern crate lyon_extra;
 pub extern crate lyon_svg;
 
 pub use lyon_tessellation as tessellation;
-pub use tessellation::path as path;
-pub use tessellation::geom as geom;
+pub use tessellation::path;
+pub use tessellation::geom;
 pub use lyon_extra as extra;
 pub use lyon_svg as svg;
 

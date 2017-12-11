@@ -16,11 +16,12 @@ use glium::{glutin, Surface};
 use glium::glutin::Event;
 use glium::glutin::EventsLoop;
 use glium::glutin::KeyboardInput;
-use glium::glutin::Event::WindowEvent;
-use glium::glutin::Window;
+
+use std::ops::Rem;
 
 const DEFAULT_WINDOW_WIDTH: f32 = 800.0;
 const DEFAULT_WINDOW_HEIGHT: f32 = 800.0;
+const PRIM_BUFFER_LEN: usize = 64;
 
 fn main() {
     println!("== gfx-rs example ==");
@@ -32,7 +33,6 @@ fn main() {
     println!("  a/z: increase/decrease the stroke width");
 
 
-    use glium::{glutin, Surface};
     let mut events_loop = glutin::EventsLoop::new();
     let window = glutin::WindowBuilder::new()
         .with_dimensions(DEFAULT_WINDOW_HEIGHT as u32, DEFAULT_WINDOW_WIDTH as u32)
@@ -41,7 +41,7 @@ fn main() {
     let context = glutin::ContextBuilder::new().with_vsync(true);
     let display = glium::Display::new(window, context, &events_loop).unwrap();
 
-    let num_instances = 32;
+    let num_instances  = 32;
     let tolerance = 0.02;
 
     // Build a Path for the rust logo.
@@ -49,12 +49,83 @@ fn main() {
     build_logo_path(&mut builder);
     let path = builder.build();
 
+    let mut logo_fill_geometry: VertexBuffers<GpuVertex> = VertexBuffers::new();
+    let mut logo_stroke_geometry : VertexBuffers<GpuVertex> = VertexBuffers::new();
+
+    let stroke_prim_id = 0;
+    let fill_prim_id = 1;
+
+    FillTessellator::new()
+        .tessellate_path(
+            path.path_iter(),
+            &FillOptions::tolerance(tolerance),
+            &mut BuffersBuilder::new(&mut logo_fill_geometry, GpuVertexFillCtor),
+        )
+        .unwrap();
+
+    StrokeTessellator::new().tessellate_path(
+        path.path_iter(),
+        &StrokeOptions::tolerance(tolerance).dont_apply_line_width(),
+        &mut BuffersBuilder::new(
+            &mut logo_stroke_geometry,
+            GpuVertexStrokeCtor,
+        ),
+    );
+
+ let mut instances = vec![
+        IdVertex { a_prim_id: 0 },
+        ];
+
+ for i in 1..num_instances+1 {
+ 	 instances.push(IdVertex{
+ 		a_prim_id:i as i32,
+ 	});
+ }
+
+ let instance_buf = glium::VertexBuffer::new(&display, &instances).unwrap();
+
     let mut bg_geometry: VertexBuffers<BgVertex> = VertexBuffers::new();
     fill_rectangle(
         &Rect::new(point(-1.0, -1.0), size(2.0, 2.0)),
         &mut BuffersBuilder::new(&mut bg_geometry, BgVertexCtor),
     );
 
+    let mut cpu_primitives = Vec::with_capacity(PRIM_BUFFER_LEN);
+    for _ in 0..PRIM_BUFFER_LEN {
+        cpu_primitives.push(Primitive {
+            color: [1.0, 0.0, 0.0, 1.0],
+            z_index: 0,
+            width: 0.0,
+            translate: [0.0, 0.0],
+        });
+    }
+
+    // Stroke primitive
+    cpu_primitives[stroke_prim_id] = Primitive {
+        color: [0.0, 0.0, 0.0, 1.0],
+        z_index: num_instances as i32 + 2,
+        width: 1.0,
+        translate: [0.0, 0.0],
+    };
+    // Main fill primitive
+    cpu_primitives[fill_prim_id] = Primitive {
+        color: [1.0, 1.0, 1.0, 1.0],
+        z_index: num_instances as i32 + 1,
+        width: 0.0,
+        translate: [0.0, 0.0],
+    };
+    // Intance primitives
+    for idx in (fill_prim_id + 1)..(fill_prim_id + num_instances) {
+        cpu_primitives[idx].z_index = (num_instances - idx + 1) as i32;
+        cpu_primitives[idx].color = [
+            (0.1 * idx as f32).rem(1.0),
+            (0.5 * idx as f32).rem(1.0),
+            (0.9 * idx as f32).rem(1.0),
+            1.0,
+        ];
+    }
+
+    //background shader
     let bg_program = glium::Program::from_source(
         &display,
         BACKGROUND_VERTEX_SHADER,
@@ -62,11 +133,31 @@ fn main() {
         None,
     ).unwrap();
 
-    let vertex_buffer = glium::VertexBuffer::new(&display, &bg_geometry.vertices).unwrap();
-    let indices = glium::IndexBuffer::new(
+    //rust logo shader
+    let logo_program = glium::Program::from_source(&display, VERTEX_SHADER, FRAGMENT_SHADER, None)
+        .unwrap();
+
+    //background vertices and indices
+    let bg_vertex_buffer = glium::VertexBuffer::new(&display, &bg_geometry.vertices).unwrap();
+    let bg_index_buffer = glium::IndexBuffer::new(
         &display,
         glium::index::PrimitiveType::TrianglesList,
         &bg_geometry.indices,
+    ).unwrap();
+
+    //rust logo vertices and indices
+    let logo_fill_vertex_buffer = glium::VertexBuffer::new(&display, &logo_fill_geometry.vertices).unwrap();
+    let logo_fill_index_buffer = glium::IndexBuffer::new(
+        &display,
+        glium::index::PrimitiveType::TrianglesList,
+        &logo_fill_geometry.indices,
+    ).unwrap(); 
+
+    let logo_stroke_vertex_buffer = glium::VertexBuffer::new(&display, &logo_stroke_geometry.vertices).unwrap();
+    let logo_stroke_index_buffer = glium::IndexBuffer::new(
+        &display,
+        glium::index::PrimitiveType::TrianglesList,
+        &logo_stroke_geometry.indices,
     ).unwrap();
 
     let mut scene = SceneParams {
@@ -83,37 +174,86 @@ fn main() {
         window_size: (DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT),
     };
 
-    let mut status = true;
+    let mut frame_count: usize = 0;
     while update_inputs(&mut events_loop, &mut scene) {
         let (w, h) = display.gl_window().get_inner_size_pixels().unwrap();
         scene.window_size = (w as f32, h as f32);
 
-        let mut gb = Globals {
-            u_resolution: [DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT],
+        let gb = Globals {
+            u_resolution: [w as f32, h as f32],
             u_zoom: scene.zoom,
             u_scroll_offset: scene.scroll.to_array(),
         };
 
-        let mut ub: glium::uniforms::UniformBuffer<Globals> =
+        let ub: glium::uniforms::UniformBuffer<Globals> =
             glium::uniforms::UniformBuffer::new(&display, gb).unwrap();
 
-        let uniforms =
-            uniform! {
-	    Globals: &ub
-	};
+        cpu_primitives[stroke_prim_id as usize].width = scene.stroke_width;
+        cpu_primitives[stroke_prim_id as usize].color =
+            [
+                (frame_count as f32 * 0.008 - 1.6).sin() * 0.1 + 0.1,
+                (frame_count as f32 * 0.005 - 1.6).sin() * 0.1 + 0.1,
+                (frame_count as f32 * 0.01 - 1.6).sin() * 0.1 + 0.1,
+                1.0,
+            ];
+
+        for idx in 2..(num_instances + 1) {
+            cpu_primitives[idx].translate =
+                [
+                    (frame_count as f32 * 0.001 * idx as f32).sin() * (100.0 + idx as f32 * 10.0),
+                    (frame_count as f32 * 0.002 * idx as f32).sin() * (100.0 + idx as f32 * 10.0),
+                ];
+        }
+
+        let mut prims = Primitives { primitives: [cpu_primitives[0]; PRIM_BUFFER_LEN] };
+
+        prims.primitives.copy_from_slice(&cpu_primitives[..]);
+
+        // let ub: glium::uniforms::UniformBuffer<Globals> =
+        //     glium::uniforms::UniformBuffer::new(&display, gb).unwrap();
+
+        let prim_buffer: glium::uniforms::UniformBuffer<Primitives> =
+            glium::uniforms::UniformBuffer::new(&display, prims).unwrap();
+
+
+        let bg_uniforms = uniform! { Globals: &ub };
         let mut target = display.draw();
-        target.clear_color(0.8, 0.8, 0.8, 1.0);
+        //target.clear_color(0.8, 0.8, 0.8, 1.0);
         target
             .draw(
-                &vertex_buffer,
-                &indices,
+                &bg_vertex_buffer,
+                &bg_index_buffer,
                 &bg_program,
-                &uniforms,
+                &bg_uniforms,
+                &Default::default(),
+            )
+            .unwrap();
+
+        let logo_uniforms = uniform!{Globals: &ub, u_primitives : &prim_buffer};
+        target
+            .draw(
+                (&logo_fill_vertex_buffer,
+                instance_buf.per_instance().unwrap()),
+                &logo_fill_index_buffer,
+                &logo_program,
+                &logo_uniforms,
+                &Default::default(),
+            )
+            .unwrap();
+
+        let logo_uniforms = uniform!{Globals: &ub, u_primitives : &prim_buffer};
+        target
+            .draw(
+               (&logo_stroke_vertex_buffer,
+                instance_buf.per_instance().unwrap()),
+                &logo_stroke_index_buffer,
+                &logo_program,
+                &logo_uniforms,
                 &Default::default(),
             )
             .unwrap();
         target.finish().unwrap();
-
+        frame_count += 1;
     }
 }
 
@@ -152,7 +292,7 @@ fn update_inputs(events_loop: &mut EventsLoop, scene: &mut SceneParams) -> bool 
             Event::WindowEvent {
                 event: WindowEvent::KeyboardInput {
                     input: KeyboardInput {
-                        state: Pressed,
+                        state: _,
                         virtual_keycode: Some(key),
                         ..
                     },
@@ -215,6 +355,22 @@ fn update_inputs(events_loop: &mut EventsLoop, scene: &mut SceneParams) -> bool 
     return status;
 }
 
+#[derive(Clone, Copy)]
+struct Primitive {
+    color: [f32; 4],
+    z_index: i32,
+    width: f32,
+    translate: [f32; 2],
+}
+
+implement_uniform_block!(Primitive, color, z_index, width, translate);
+
+#[derive(Clone, Copy)]
+struct Primitives {
+    primitives: [Primitive; PRIM_BUFFER_LEN],
+}
+
+implement_uniform_block!(Primitives, primitives);
 
 #[derive(Clone, Copy)]
 struct Globals {
@@ -241,6 +397,53 @@ impl VertexConstructor<tessellation::FillVertex, BgVertex> for BgVertexCtor {
         BgVertex { position: vertex.position.to_array() }
     }
 }
+
+
+#[derive(Copy, Clone)]
+struct GpuVertex {
+    a_position: [f32; 2],
+    a_normal: [f32; 2],
+}
+
+implement_vertex!(GpuVertex, a_position, a_normal);
+
+#[derive(Copy, Clone)]
+struct IdVertex{
+    a_prim_id: i32, // An id pointing to the PrimData struct above.
+}
+
+implement_vertex!(IdVertex, a_prim_id);
+
+
+struct GpuVertexFillCtor;
+impl VertexConstructor<tessellation::FillVertex, GpuVertex> for GpuVertexFillCtor {
+    fn new_vertex(&mut self, vertex: tessellation::FillVertex) -> GpuVertex {
+        debug_assert!(!vertex.position.x.is_nan());
+        debug_assert!(!vertex.position.y.is_nan());
+        debug_assert!(!vertex.normal.x.is_nan());
+        debug_assert!(!vertex.normal.y.is_nan());
+        GpuVertex {
+            a_position: vertex.position.to_array(),
+            a_normal: vertex.normal.to_array(),
+        }
+    }
+}
+
+struct GpuVertexStrokeCtor;
+impl VertexConstructor<tessellation::StrokeVertex, GpuVertex> for GpuVertexStrokeCtor {
+    fn new_vertex(&mut self, vertex: tessellation::StrokeVertex) -> GpuVertex {
+        debug_assert!(!vertex.position.x.is_nan());
+        debug_assert!(!vertex.position.y.is_nan());
+        debug_assert!(!vertex.normal.x.is_nan());
+        debug_assert!(!vertex.normal.y.is_nan());
+        debug_assert!(!vertex.advancement.is_nan());
+        GpuVertex {
+            a_position: vertex.position.to_array(),
+            a_normal: vertex.normal.to_array(),
+        }
+    }
+}
+
 
 struct SceneParams {
     target_zoom: f32,
@@ -307,5 +510,54 @@ static BACKGROUND_FRAGMENT_SHADER: &'static str = &"
             mod(pos.y, 100.0 / grid_scale * u_zoom) <= 2.0) {
             out_color *= 1.2;
         }
+    }
+";
+
+pub static VERTEX_SHADER: &'static str = &"
+    #version 140
+
+    #define PRIM_BUFFER_LEN 64
+
+    uniform Globals {
+        vec2 u_resolution;
+        vec2 u_scroll_offset;
+        float u_zoom;
+    };
+
+    struct Primitive {
+        vec4 color;
+        int z_index;
+        float width;
+        vec2 translate;
+    };
+    uniform u_primitives { Primitive primitives[PRIM_BUFFER_LEN]; };
+
+    in vec2 a_position;
+    in vec2 a_normal;
+    in int a_prim_id;
+
+    out vec4 v_color;
+
+    void main() {
+        int id = a_prim_id + gl_InstanceID;
+        Primitive prim = primitives[id];
+
+        vec2 local_pos = a_position + a_normal * prim.width;
+        vec2 world_pos = local_pos - u_scroll_offset + prim.translate;
+        vec2 transformed_pos = world_pos * u_zoom / (vec2(0.5, -0.5) * u_resolution);
+
+        float z = float(prim.z_index) / 4096.0;
+        gl_Position = vec4(transformed_pos, 1.0 - z, 1.0);
+        v_color = prim.color;
+    }
+";
+
+pub static FRAGMENT_SHADER: &'static str = &"
+    #version 140
+    in vec4 v_color;
+    out vec4 out_color;
+
+    void main() {
+        out_color = v_color;
     }
 ";
